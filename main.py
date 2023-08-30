@@ -1,7 +1,33 @@
 from PIL import Image
 import math
+from sklearn.cluster import KMeans
+import numpy as np
 import os
 from os.path import isfile, join
+from dataclasses import dataclass
+
+
+@dataclass
+class Gap:
+    x: int
+    y: int
+
+
+@dataclass
+class IPhoneConfig:
+    cols: int
+    rows: int
+    gap: Gap
+    icon_size: int
+    x_start: int
+    y_start: int
+
+
+IPHONE_CONFIG = {
+    "8": IPhoneConfig(
+        cols=4, rows=6, gap=Gap(x=54, y=56), icon_size=120, x_start=54, y_start=60
+    ),
+}
 
 
 def get_images(assets_path: str):
@@ -11,15 +37,6 @@ def get_images(assets_path: str):
         if isfile(join_path):
             files.append(join_path)
     return files
-
-
-IPHONE_8_COLS = 4
-IPHONE_8_ROWS = 6
-
-x_start, y_start = 54, 60
-icon_size = 120
-gap_x = 54
-gap_y = 56
 
 
 def rgb_to_hsv(r, g, b) -> tuple:
@@ -58,54 +75,73 @@ def get_hsv_from_image(img: Image.Image) -> tuple:
     g = weighted_avg(g_hist)
     b = weighted_avg(b_hist)
 
-    return rgb_to_hsv(r, g, b)
+    return rgb_to_hsv(r, g, b), (r, g, b)
 
 
-def extract_icons_from_images(images: list[Image.Image]) -> list[dict]:
+def extract_icons_from_images(
+    images: list[Image.Image], config: IPhoneConfig
+) -> list[dict]:
     icons = []
+    feature_list = []
 
     for img in images:
-        for row in range(IPHONE_8_ROWS):
-            for col in range(IPHONE_8_COLS):
-                x1 = x_start + col * (icon_size + gap_x)
-                y1 = y_start + row * (icon_size + gap_y)
+        for row in range(config.rows):
+            for col in range(config.cols):
+                x1 = config.x_start + col * (config.icon_size + config.gap.x)
+                y1 = config.y_start + row * (config.icon_size + config.gap.y)
 
-                x2 = x1 + icon_size
-                y2 = y1 + icon_size
+                x2 = x1 + config.icon_size
+                y2 = y1 + config.icon_size
 
                 icon = img.crop((x1, y1, x2, y2))
 
-                hsv = get_hsv_from_image(icon)
+                hsv, rgb = get_hsv_from_image(icon)
                 if sum(hsv) == 0:
                     continue
+
+                feature_list.append(rgb)
                 icons.append({"icon": icon, "hsv": hsv})
 
+    # Perform KMeans clustering
+    feature_array = np.array(feature_list)
+    kmeans = KMeans(n_clusters=7).fit(
+        feature_array
+    )  # You can change the number of clusters
+    labels = kmeans.labels_
+
+    for i, label in enumerate(labels):
+        icons[i]["label"] = label
     return icons
 
 
-def create_sorted_icons_image(icons: list[Image.Image]) -> Image.Image:
-    n_rows = math.ceil(len(icons) / IPHONE_8_COLS)
+def create_sorted_icons_image(
+    icons: list[Image.Image], config: IPhoneConfig
+) -> Image.Image:
+    n_rows = math.ceil(len(icons) / config.cols)
 
-    new_img_width = IPHONE_8_COLS * (icon_size + gap_x) - gap_x
-    new_img_height = n_rows * (icon_size + gap_y) - gap_y
+    new_img_width = config.cols * (config.icon_size + config.gap.x) - config.gap.x
+    new_img_height = n_rows * (config.icon_size + config.gap.y) - config.gap.y
     new_img = Image.new("RGB", (new_img_width, new_img_height), "black")
 
     for i, icon_data in enumerate(icons):
-        row = i // IPHONE_8_COLS
-        col = i % IPHONE_8_COLS
-        x = col * (icon_size + gap_x)
-        y = row * (icon_size + gap_y)
+        row = i // config.cols
+        col = i % config.cols
+        x = col * (config.icon_size + config.gap.x)
+        y = row * (config.icon_size + config.gap.y)
         new_img.paste(icon_data["icon"], (x, y))
 
     return new_img
 
 
 def main():
-    images = [Image.open(f) for f in get_images("./assets")]
-    icons = extract_icons_from_images(images)
-    icons.sort(key=lambda x: x["hsv"])
+    config = IPHONE_CONFIG["8"]
 
-    new_img = create_sorted_icons_image(icons)
+    images = [Image.open(f) for f in get_images("./assets")]
+    icons = extract_icons_from_images(images, config)
+    icons.sort(key=lambda x: x["label"])
+
+    new_img = create_sorted_icons_image(icons, config)
+    # new_img.save("post-sklearn.png")
     new_img.show()
 
 
